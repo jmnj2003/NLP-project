@@ -191,75 +191,29 @@ def run_bert_sentiment(text: str):
     return label, confidence
 
 
-# Translation — PyTorch MarianMT
-# Using higher-quality models:
-#   Malay  → Helsinki-NLP/opus-mt-ms-en  (MarianMT, trained on OPUS corpus)
-#   Chinese → Helsinki-NLP/opus-mt-zh-en  (MarianMT, trained on OPUS corpus)
-# We also apply beam search (num_beams=5) and length_penalty for better output.
-
-TRANSLATION_MODELS = {
-    "ms": "Helsinki-NLP/opus-mt-ms-en",
-    "zh": "Helsinki-NLP/opus-mt-zh-en",
+# Translation — Google Translate via deep-translator
+# deep-translator uses a lightweight HTTPS call to Google Translate instead.
+_GOOGLE_LANG_MAP = {
+    "ms": "ms",      # Malay
+    "id": "id",      # Indonesian (treated same as Malay by langdetect)
+    "zh": "zh-CN",   # Chinese Simplified
+    "zh-cn": "zh-CN",
+    "zh-tw": "zh-TW",
 }
-
-@st.cache_resource(show_spinner=False)
-def _load_translation_model(src_lang: str):
-    """Load MarianMT tokenizer + PyTorch model for translation."""
-    from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-    mid = TRANSLATION_MODELS.get(src_lang)
-    if mid is None:
-        raise ValueError(f"No translation model for language: {src_lang}")
-    tokenizer = AutoTokenizer.from_pretrained(mid)
-    model     = AutoModelForSeq2SeqLM.from_pretrained(mid)
-    model.eval()
-    return tokenizer, model
-
-
-def _clean_for_bert(text: str) -> str:
-    """
-    Post-translation cleanup to improve DistilBERT accuracy:
-    - Strip leading/trailing whitespace
-    - Collapse multiple spaces
-    - Remove stray Unicode artefacts left by MarianMT
-    - Lowercase (DistilBERT is cased-insensitive for SST-2 fine-tune)
-    """
-    import re
-    text = text.strip()
-    text = re.sub(r"\s+", " ", text)                  # collapse whitespace
-    text = re.sub(r"[^-]+", " ", text)        # drop non-ASCII leftovers
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
-
 
 def translate_text(text: str, src_lang: str):
     """
-    Translate text to English using PyTorch MarianMT.
-    Uses beam search (num_beams=5) for higher translation quality.
-    Returns (translated_str, cleaned_for_bert_str) or (None, None) on failure.
+    Translate text to English using Google Translate via deep-translator.
+    Returns translated string or None on failure.
+    No model download — just an HTTPS API call.
     """
     try:
-        import torch
-        tokenizer, model = _load_translation_model(src_lang)
-        inputs = tokenizer(
-            [text],
-            return_tensors="pt",
-            truncation=True,
-            max_length=512,
-            padding=True,
-        )
-        with torch.no_grad():
-            output_ids = model.generate(
-                **inputs,
-                num_beams=5,           # beam search → better fluency
-                length_penalty=1.0,    # balanced length
-                early_stopping=True,
-                no_repeat_ngram_size=3,  # avoid repetitive output
-            )
-        raw_translation = tokenizer.decode(output_ids[0], skip_special_tokens=True)
-        cleaned         = _clean_for_bert(raw_translation)
-        return raw_translation, cleaned
-    except Exception:
-        return None, None
+        from deep_translator import GoogleTranslator
+        google_src = _GOOGLE_LANG_MAP.get(src_lang, src_lang)
+        translated = GoogleTranslator(source=google_src, target="en").translate(text)
+        return translated if translated and translated.strip() else None
+    except Exception as e:
+        raise RuntimeError(f"Google Translate failed: {e}") from e
 
 
 # Sample reviews
@@ -573,40 +527,40 @@ elif page == "Text Analyzer":
             # Auto-detect language and translate
             try:
                 from langdetect import detect
-                detected_lang = detect(review_input)[:2]
+                raw_lang = detect(review_input)
+                # normalise variants: "id"→"ms", "zh-cn"/"zh-tw"→"zh"
+                if raw_lang in ("id",):
+                    detected_lang = "ms"
+                elif raw_lang.startswith("zh"):
+                    detected_lang = "zh"
+                else:
+                    detected_lang = raw_lang[:2]
             except Exception:
                 detected_lang = "en"
 
             if detected_lang != "en" and _transformers_ok():
-                lang_names = {"ms": "Malay", "zh": "Chinese"}
+                lang_names = {"ms": "Malay", "id": "Malay", "zh": "Chinese"}
                 lang_label = lang_names.get(detected_lang, detected_lang.upper())
-                with st.spinner(f"Detected {lang_label} — translating to English for analysis..."):
+                with st.spinner(f"Detected {lang_label} — translating to English..."):
                     try:
-                        raw_translation, bert_ready = translate_text(review_input, detected_lang)
-                        if raw_translation:
-                            # Show the human-readable translation clearly
+                        result = translate_text(review_input, detected_lang)
+                        if result:
+                            final_text = result
+                            translated = True
                             st.markdown(
-                                f"<div style='"
-                                f"background:#1e2a3a;border-left:4px solid #CCD67F;"
-                                f"padding:12px 16px;border-radius:6px;margin:8px 0;"
-                                f"font-size:0.95rem;'>"
-                                f"🌐 <b>Translated ({lang_label} → English):</b><br>"
-                                f"<span style='color:#e8e8e8;font-style:italic;'>{raw_translation}</span>"
+                                f"<div style='background:#1e2a3a;border-left:4px solid #CCD67F;"
+                                f"padding:12px 16px;border-radius:6px;margin:8px 0;font-size:0.95rem;'>"
+                                f"<b>Translated ({lang_label} → English):</b><br>"
+                                f"<span style='color:#e8e8e8;font-style:italic;'>{result}</span>"
                                 f"</div>",
                                 unsafe_allow_html=True,
                             )
-                            # Use the cleaned version for BERT (better accuracy)
-                            final_text = bert_ready if bert_ready else raw_translation
-                            translated = True
                         else:
-                            st.warning(
-                                f"⚠️ Translation unavailable — "
-                                f"analysing original {lang_label} text (accuracy may be lower)."
-                            )
+                            st.warning(f"Translation returned empty. Analysing original text.")
                     except Exception as _te:
-                        st.warning(f"Translation skipped ({_te}) — analysing original text.")
+                        st.error(f"Translation error: `{_te}`")
 
-            # ── Run model ──────────────────────────────────────────────────────
+            # Run model
             sentiment_label = None
             confidence      = None
             model_name      = None
@@ -665,7 +619,7 @@ elif page == "Text Analyzer":
                         unsafe_allow_html=True
                     )
 
-            # ── Results ────────────────────────────────────────────────────────
+            # Results
             with result_col:
                 r1, r2 = st.columns(2)
                 with r1:
@@ -745,7 +699,8 @@ elif page == "Text Analyzer":
 
             with st.expander("Preprocessing Details"):
                 if translated:
-                    st.caption("🌐 Sentiment was analysed on the English translation shown above.")
+                    st.markdown(f"**Original:** {review_input[:120]}...")
+                    st.markdown(f"**Translated:** {final_text[:120]}...")
                 if "tokens" in dir() and not nlp_engine.startswith("Advanced"):
                     st.markdown(f"**Tokens after preprocessing:** {len(tokens)}")
                     preview = ", ".join(tokens[:30]) + ("..." if len(tokens) > 30 else "")
