@@ -1,7 +1,3 @@
-"""
-Movie Review Sentiment Detector — Multi-page Streamlit App
-"""
-
 import os, re, warnings, sqlite3, datetime
 import joblib
 import numpy as np
@@ -26,7 +22,7 @@ C_BG     = "#A77F60"
 C_BOX    = "#F3E4C9"
 C_SIDE   = "#1E1E24"
 
-# ── Database ───────────────────────────────────────────────────────────────────
+# Database
 DB_PATH = "history_reviews.db"
 
 def init_db():
@@ -92,81 +88,69 @@ def delete_history():
 
 init_db()
 
-# ── OMDb poster ────────────────────────────────────────────────────────────────
-OMDB_KEY = "bf1c9b03"
+
+# TMDB API (more reliable than OMDb)
+TMDB_TOKEN  = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiI2NGIwOGNjNjUxZjAyMzJkMGYwODExNDRhMjU4MTkxMSIsIm5iZiI6MTc4MTE0MTc0MS4wODksInN1YiI6IjZhMmExMGVkNDM5N2I0YTk0MzY4NTRhMSIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.OdDmForQMdQYOFnEX-rZ56GSuPMygmDt0XWZlIOjrNA"  # Bearer
+TMDB_APIKEY = "64b08cc651f0232d0f081144a2581911"   # v3 fallback
+
+# Some non-English titles need manual mapping to find the correct poster (Sample Review)
 TITLE_MAP = {
     "流浪地球": "The Wandering Earth",
-    "长城": "The Great Wall",
+    "长城":     "The Great Wall",
 }
+
+TMDB_IMG  = "https://image.tmdb.org/t/p/w500"
+TMDB_BASE = "https://api.themoviedb.org/3"
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def get_movie_poster(title):
-    search = TITLE_MAP.get(title, title)
-    headers = {"User-Agent": "Mozilla/5.0"}
-
-    def _parse(r):
-        """Return (poster, year, genre, rating) from an OMDb response dict."""
-        poster = r.get("Poster", "")
-        return (
-            poster if poster and poster != "N/A" else None,
-            r.get("Year", ""),
-            r.get("Genre", ""),
-            r.get("imdbRating", "N/A"),
-        )
-
+    search  = TITLE_MAP.get(title, title)
+    headers = {
+        "Authorization": f"Bearer {TMDB_TOKEN}",
+        "accept": "application/json",
+    }
     try:
-        # 1️⃣  Exact title match  (t=)
+        # Search for the movie by title
         r = requests.get(
-            "https://www.omdbapi.com/",
-            params={"t": search, "apikey": OMDB_KEY},
-            timeout=10, headers=headers,
+            f"{TMDB_BASE}/search/movie",
+            params={"query": search, "include_adult": False,
+                    "language": "en-US", "page": 1},
+            headers=headers, timeout=10,
         ).json()
-        if r.get("Response") == "True":
-            poster, year, genre, rating = _parse(r)
-            if poster:
-                return poster, year, genre, rating
-            # found the movie but no poster — try search fallback for a poster
-            meta = (year, genre, rating)
-        else:
-            meta = None
 
-        # 2️⃣  Search fallback  (s=) — takes first result that has a poster
-        r2 = requests.get(
-            "https://www.omdbapi.com/",
-            params={"s": search, "apikey": OMDB_KEY, "type": "movie"},
-            timeout=10, headers=headers,
+        results = r.get("results", [])
+        if not results:
+            return None, "", "", "N/A"
+
+        # Pick the first result that has a poster; else just first result
+        movie    = next((m for m in results if m.get("poster_path")), results[0])
+        movie_id = movie["id"]
+
+        # Fetch full movie details for genres + rating
+        detail = requests.get(
+            f"{TMDB_BASE}/movie/{movie_id}",
+            params={"language": "en-US"},
+            headers=headers, timeout=10,
         ).json()
-        if r2.get("Response") == "True":
-            for item in r2.get("Search", []):
-                imdb_id = item.get("imdbID")
-                if not imdb_id:
-                    continue
-                # fetch full record by imdbID for poster + metadata
-                r3 = requests.get(
-                    "https://www.omdbapi.com/",
-                    params={"i": imdb_id, "apikey": OMDB_KEY},
-                    timeout=10, headers=headers,
-                ).json()
-                if r3.get("Response") == "True":
-                    poster, year, genre, rating = _parse(r3)
-                    if poster:
-                        return poster, year, genre, rating
 
-        # 3️⃣  Return metadata without poster if we at least found the movie
-        if meta:
-            return None, meta[0], meta[1], meta[2]
+        poster_path = detail.get("poster_path") or movie.get("poster_path")
+        poster_url  = f"{TMDB_IMG}{poster_path}" if poster_path else None
+        year        = (detail.get("release_date") or "")[:4]
+        genres      = ", ".join(g["name"] for g in detail.get("genres", [])[:3])
+        rating      = detail.get("vote_average")
+        rating_str  = f"{rating:.1f}" if rating else "N/A"
+
+        return poster_url, year, genres, rating_str
 
     except Exception:
         pass
-
     return None, "", "", "N/A"
 
-# ── BERT ───────────────────────────────────────────────────────────────────────
+# BERT model
 def _transformers_ok():
-    """Check PyTorch + HuggingFace models are available. TF dropped in transformers 5.x."""
     try:
-        import torch                                                        # noqa: F401
-        from transformers import AutoTokenizer, AutoModelForSequenceClassification  # noqa: F401
+        import torch                                                        
+        from transformers import AutoTokenizer, AutoModelForSequenceClassification
         st.session_state.pop("_bert_err", None)
         return True
     except Exception as _e:
@@ -174,7 +158,7 @@ def _transformers_ok():
         return False
 
 
-# ── DistilBERT sentiment — PyTorch (transformers 5.x dropped TF support) ──────
+# DistilBERT sentiment — PyTorch (transformers 5.x dropped TF support)
 @st.cache_resource(show_spinner=False)
 def _load_bert_model():
     """Load DistilBERT tokenizer + PyTorch model via Auto classes."""
@@ -187,7 +171,7 @@ def _load_bert_model():
 
 
 def run_bert_sentiment(text: str):
-    """Run DistilBERT inference with PyTorch — no pipeline."""
+    """Run DistilBERT inference with PyTorch"""
     import torch
     import torch.nn.functional as F
     tokenizer, model = _load_bert_model()
@@ -207,7 +191,7 @@ def run_bert_sentiment(text: str):
     return label, confidence
 
 
-# ── Translation — PyTorch MarianMT ────────────────────────────────────────────
+# Translation — PyTorch MarianMT
 @st.cache_resource(show_spinner=False)
 def _load_translation_model(src_lang: str):
     """Load MarianMT tokenizer + PyTorch model for translation."""
@@ -239,7 +223,7 @@ def translate_text(text: str, src_lang: str):
         return None
 
 
-# ── Sample reviews ─────────────────────────────────────────────────────────────
+# Sample reviews
 @st.cache_data
 def load_sample_reviews():
     return [
@@ -253,10 +237,10 @@ def load_sample_reviews():
 
 SAMPLE_REVIEWS = load_sample_reviews()
 
-# ── Page config ────────────────────────────────────────────────────────────────
+# Page config
 st.set_page_config(page_title="Movie Review Sentiment Detector", layout="wide")
 
-# ── CSS ────────────────────────────────────────────────────────────────────────
+# CSS
 st.markdown(f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght=700;800&family=Plus+Jakarta+Sans:wght=400;500;700&display=swap');
@@ -362,7 +346,7 @@ hr{{border:none!important;margin:12px 0!important;}}
 </style>
 """, unsafe_allow_html=True)
 
-# ── Preprocessing ──────────────────────────────────────────────────────────────
+# Preprocessing
 stop_words = set(stopwords.words("english"))
 lemmatizer = WordNetLemmatizer()
 
@@ -376,7 +360,7 @@ def preprocess(text):
     tokens = [lemmatizer.lemmatize(t) for t in tokens]
     return tokens
 
-# ── Load models ────────────────────────────────────────────────────────────────
+# Load models
 @st.cache_resource
 def load_models():
     required = ["best_model.pkl","tfidf_vectorizer.pkl"]
@@ -400,7 +384,7 @@ def load_dataset():
 
 model, tfidf, load_error = load_models()
 
-# ── Sidebar ────────────────────────────────────────────────────────────────────
+# Sidebar
 with st.sidebar:
     st.markdown(
         "<h2 style='color:#FFFFFF;font-size:1.1rem;font-weight:800;"
@@ -429,9 +413,8 @@ with st.sidebar:
             st.caption(_err[:120])
 
 
-# ════════════════════════════════════════════════════════════
+
 # PAGE 1 — HOME
-# ════════════════════════════════════════════════════════════
 if page == "Home":
     st.markdown("<h1>Movie Review Sentiment Detector</h1>", unsafe_allow_html=True)
 
@@ -499,9 +482,8 @@ if page == "Home":
             )
 
 
-# ════════════════════════════════════════════════════════════
+
 # PAGE 2 — TEXT ANALYZER
-# ════════════════════════════════════════════════════════════
 elif page == "Text Analyzer":
     st.markdown("<h1>Text Analyzer</h1>", unsafe_allow_html=True)
 
@@ -549,7 +531,7 @@ elif page == "Text Analyzer":
             final_text = review_input
             translated = False
 
-            # ── Auto-detect language and translate ─────────────────────────────
+            # Auto-detect language and translate
             try:
                 from langdetect import detect
                 detected_lang = detect(review_input)[:2]
@@ -599,14 +581,14 @@ elif page == "Text Analyzer":
                 sentiment_label = "POSITIVE" if pred == 1 else "NEGATIVE"
                 model_name      = f"{type(model).__name__}"
 
-            # ── Save to DB ─────────────────────────────────────────────────────
+            # Save to DB
             save_to_db(movie_title, review_input[:500], sentiment_label,
                        round(confidence, 4) if confidence else None, model_name)
 
             st.markdown("<br>", unsafe_allow_html=True)
             poster_col, result_col = st.columns([1, 2])
 
-            # ── Poster ─────────────────────────────────────────────────────────
+            # Movie Poster
             with poster_col:
                 with st.spinner("Fetching poster..."):
                     poster_url, year, genre, imdb_rating = get_movie_poster(movie_title)
@@ -692,7 +674,7 @@ elif page == "Text Analyzer":
                     else:
                         word_scores = sorted(word_scores, key=lambda x: abs(x[1]), reverse=True)[:6]
                         if nlp_engine.startswith("Advanced"):
-                            st.caption("ℹ️ Showing classical ML word weights as reference — BERT uses contextual embeddings, not these scores.")
+                            st.caption("Showing classical ML word weights as reference — BERT uses contextual embeddings, not these scores.")
                         w_cols = st.columns(len(word_scores))
                         for w_col, (wd, sc) in zip(w_cols, word_scores):
                             with w_col:
@@ -717,7 +699,7 @@ elif page == "Text Analyzer":
 
             st.success("Review saved to history database.")
 
-    # ── Sample reviews ─────────────────────────────────────────────────────────
+    # Sample reviews
     st.markdown("<br><p class='section-label'>Try a Multilingual Sample Review</p>", unsafe_allow_html=True)
     for idx, (m_title, sample_text) in enumerate(SAMPLE_REVIEWS):
         s1, s2 = st.columns([6,1])
@@ -736,9 +718,8 @@ elif page == "Text Analyzer":
                 st.rerun()
 
 
-# ════════════════════════════════════════════════════════════
+
 # PAGE 3 — DATA EXPLORER
-# ════════════════════════════════════════════════════════════
 elif page == "Data Explorer":
     st.markdown("<h1>Data Explorer</h1>", unsafe_allow_html=True)
     tab_data, tab_history = st.tabs(["Dataset Overview","Review History"])
@@ -853,9 +834,8 @@ elif page == "Data Explorer":
                 delete_history(); st.success("Cleared."); st.rerun()
 
 
-# ════════════════════════════════════════════════════════════
+
 # PAGE 4 — VISUALIZATIONS
-# ════════════════════════════════════════════════════════════
 elif page == "Visualizations":
     st.markdown("<h1>Visualizations & Insights</h1>", unsafe_allow_html=True)
 
@@ -968,9 +948,8 @@ extraction choice.
 """, unsafe_allow_html=True)
 
 
-# ════════════════════════════════════════════════════════════
+
 # PAGE 5 — MODEL INFO
-# ════════════════════════════════════════════════════════════
 elif page == "Model Info":
     st.markdown("<h1>Model Info</h1>", unsafe_allow_html=True)
 
@@ -1025,20 +1004,18 @@ elif page == "Model Info":
         if _transformers_ok():
             try:
                 get_bert_pipeline()
-                bert_status = "✅ Loaded successfully"
+                bert_status = "Loaded successfully"
             except Exception as _e:
-                bert_status = f"⚠️ Import OK but failed: {_e}"
+                bert_status = f"Import OK but failed: {_e}"
         else:
-            bert_status = "❌ Not installed or pipeline initialization missing dependencies"
+            bert_status = "Not installed or pipeline initialization missing dependencies"
         st.markdown(
             f"<div class='content-box'><b>DistilBERT (Bonus — Advanced NLP)</b><br>"
             f"A lightweight transformer model pre-trained on SST-2 sentiment data from Hugging Face. "
             f"Uses contextual word embeddings — understands meaning based on surrounding words, "
             f"making it more robust to sarcasm and complex phrasing than bag-of-words methods.<br><br>"
             f"- Model: distilbert-base-uncased-finetuned-sst-2-english<br>"
-            f"- 66M parameters, 40% smaller than BERT-base<br>"
-            f"- No retraining — used for inference only<br>"
-            f"- Status: <b>{bert_status}</b></div>",
+            f"- 66M parameters, 40% smaller than BERT-base<br>",
             unsafe_allow_html=True
         )
 
