@@ -1,0 +1,47 @@
+Sample Reviews (MULTILINGUAL WITH TRANSLATIONS)
+
+----------------------------------------------------------------------
+SAMPLE 1: Inception
+----------------------------------------------------------------------
+Original Language: English
+Original Review:   An absolute masterpiece! The pacing was perfect, the character development was spectacular, and the execution kept me on the edge of my seat.
+Ground Truth Sentiment: POSITIVE
+
+----------------------------------------------------------------------
+SAMPLE 2: Titanic
+----------------------------------------------------------------------
+Original Language: English
+Original Review:   Don't waste your money on this. The trailer was misleading, and the actual movie was incredibly dull and uninspired.
+Ground Truth Sentiment: NEGATIVE
+
+----------------------------------------------------------------------
+SAMPLE 3: Mat Kilau
+----------------------------------------------------------------------
+Original Language: Malay
+Original Review:   Filem ini memang sangat luar biasa! Plot cerita penuh dengan kejutan dan lakonan semua watak sangat mantap dan berkualiti tinggi.
+English Translation: This movie is truly extraordinary! The story plot is full of surprises and the acting of all characters is very solid and of high quality.
+Ground Truth Sentiment: POSITIVE
+
+----------------------------------------------------------------------
+SAMPLE 4: Cicakman
+----------------------------------------------------------------------
+Original Language: Malay
+Original Review:   Jalan cerita sangat mengarut dan bosan. Rasa menyesal beli tiket, lakonan semua pelakon sangat kayu dan kaku.
+English Translation: The storyline is very nonsensical and boring. I regret buying the ticket, the acting of all the actors is very wooden and stiff.
+Ground Truth Sentiment: NEGATIVE
+
+----------------------------------------------------------------------
+SAMPLE 5: 流浪地球 (The Wandering Earth)
+----------------------------------------------------------------------
+Original Language: Chinese
+Original Review:   这部电影真的太震撼了！演员演技在线，剧情环环相扣，从头到尾毫无尿点，绝对是今年最佳佳作。
+English Translation: This movie was really so shocking and spectacular! The actors' acting was spot on, the plot was closely linked, and there wasn't a single boring moment from beginning to end. It's definitely the best masterpiece of this year.
+Ground Truth Sentiment: POSITIVE
+
+----------------------------------------------------------------------
+SAMPLE 6: 长城 (The Great Wall)
+----------------------------------------------------------------------
+Original Language: Chinese
+Original Review:   故事讲得乱七八糟，台词生硬。特效看起来只有五毛钱水平，演技极其浮夸，令人非常失望。
+English Translation: The story was told in a complete mess, and the dialogue was stiff. The special effects look like they only cost fifty cents (very cheap), and the acting is extremely exaggerated, making it very disappointing.
+Ground Truth Sentiment: NEGATIVE
